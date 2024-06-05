@@ -10,6 +10,7 @@ from openteach.robot.xarm_stick import XArm
 from scipy.spatial.transform import Rotation, Slerp
 from .operator import Operator
 from scipy.spatial.transform import Rotation as R
+from scipy.signal import butter, lfilter
 from numpy.linalg import pinv
 # Scale factor is used to convert from m to mm and mm to m.
 from openteach.constants import H_R_V, H_R_V_star, GRIPPER_OPEN, GRIPPER_CLOSE, SCALE_FACTOR
