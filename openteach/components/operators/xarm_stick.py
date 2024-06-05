@@ -41,7 +41,7 @@ def get_relative_affine(init_affine, current_affine):
 
 np.set_printoptions(precision=2, suppress=True)
 # Rotation should be filtered when it's being sent
-class Filter:
+class OldFilter:
     def __init__(self, state, comp_ratio=0.3):
         self.pos_state = state[:3]
         self.ori_state = state[3:7]
@@ -53,6 +53,30 @@ class Filter:
         ori_interp = Slerp([0, 1], Rotation.from_rotvec(
             np.stack([self.ori_state, next_state[3:7]], axis=0)),)
         self.ori_state = ori_interp([1 - self.comp_ratio])[0].as_rotvec()
+        return np.concatenate([self.pos_state, self.ori_state])
+    
+class Filter:
+    def __init__(self, state, comp_ratio=0.3, cutoff=0.1, fs=1.0, order=2):
+        self.pos_state = state[:3]
+        self.ori_state = state[3:7]
+        self.comp_ratio = comp_ratio
+        self.cutoff = cutoff
+        self.fs = fs
+        self.order = order
+        self.b, self.a = butter(self.order, self.cutoff, fs=self.fs, btype='low')
+        self.pos_history = [self.pos_state]
+
+    def __call__(self, next_state):
+        self.pos_history.append(next_state[:3])
+        if len(self.pos_history) > 1:
+            filtered_pos = lfilter(self.b, self.a, np.array(self.pos_history), axis=0)
+            self.pos_state = filtered_pos[-1]
+        else:
+            self.pos_state = next_state[:3]
+
+        ori_interp = Slerp([0, 1], Rotation.from_quat(
+            np.stack([self.ori_state, next_state[3:7]], axis=0)))
+        self.ori_state = ori_interp([1 - self.comp_ratio])[0].as_quat()
         return np.concatenate([self.pos_state, self.ori_state])
 
 
