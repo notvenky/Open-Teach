@@ -10,7 +10,7 @@ from openteach.robot.xarm_stick import XArm
 from scipy.spatial.transform import Rotation, Slerp
 from .operator import Operator
 from scipy.spatial.transform import Rotation as R
-from scipy.signal import butter, lfilter
+from scipy.signal import butter, lfilter, filtfilt
 from numpy.linalg import pinv
 # Scale factor is used to convert from m to mm and mm to m.
 from openteach.constants import H_R_V, H_R_V_star, GRIPPER_OPEN, GRIPPER_CLOSE, SCALE_FACTOR
@@ -57,27 +57,39 @@ class OldFilter:
         return np.concatenate([self.pos_state, self.ori_state])
     
 class Filter:
-    def __init__(self, state, comp_ratio=0.3, cutoff=0.1, fs=1.0, order=2):
+    def __init__(self, state, comp_ratio=0.3, cutoff_freq=0.1, fs=1.0, order=2):
         self.pos_state = state[:3]
         self.ori_state = state[3:7]
         self.comp_ratio = comp_ratio
-        self.cutoff = cutoff
-        self.fs = fs
+        self.cutoff_freq = cutoff_freq
+        self.fs = fs  # Sampling frequency
         self.order = order
-        self.b, self.a = butter(self.order, self.cutoff, fs=self.fs, btype='low')
-        self.pos_history = [self.pos_state]
+        # Create buffers for filtered output to stabilize initial outputs
+        self.filtered_pos = np.array([self.pos_state] * 10)
+        # self.filtered_ori = np.array([self.ori_state] * 10)
+
+        # Create a Butterworth filter
+        self.b, self.a = butter(self.order, self.cutoff_freq / (0.5 * fs), btype='low')
 
     def __call__(self, next_state):
-        self.pos_history.append(next_state[:3])
-        if len(self.pos_history) > 1:
-            filtered_pos = lfilter(self.b, self.a, np.array(self.pos_history), axis=0)
-            self.pos_state = filtered_pos[-1]
-        else:
-            self.pos_state = next_state[:3]
-
-        ori_interp = Slerp([0, 1], Rotation.from_quat(
+        # Calculate new interpolated state
+        new_pos = np.array(self.pos_state) * self.comp_ratio + np.array(next_state[:3]) * (1 - self.comp_ratio)
+        ori_interp = Slerp([0, 1], Rotation.from_rotvec(
             np.stack([self.ori_state, next_state[3:7]], axis=0)))
-        self.ori_state = ori_interp([1 - self.comp_ratio])[0].as_quat()
+        new_ori = ori_interp([1 - self.comp_ratio])[0].as_rotvec()
+
+        # Update buffers
+        self.filtered_pos = np.vstack((self.filtered_pos[1:], new_pos))
+        # self.filtered_ori = np.vstack((self.filtered_ori[1:], new_ori))
+
+        # Apply Butterworth filter
+        filtered_pos = filtfilt(self.b, self.a, self.filtered_pos, axis=0)[-1]
+        # filtered_ori = filtfilt(self.b, self.a, self.filtered_ori, axis=0)[-1]
+
+        # Update internal state
+        self.pos_state = filtered_pos
+        self.ori_state = new_ori
+
         return np.concatenate([self.pos_state, self.ori_state])
 
 
@@ -86,7 +98,7 @@ class XArmOperator(Operator):
         self,
         host, 
         controller_state_port,
-        use_filter=False,
+        use_filter=True,
         fix_orientation=False,
         gripper_port=None,
         cartesian_publisher_port = None,
